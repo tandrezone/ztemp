@@ -141,7 +141,11 @@ class TemplateEngine
     }
 
     /**
-     * Process @foreach($var) … @endforeach blocks.
+     * Process @foreach($var) … @endforeach blocks, including nested ones.
+     *
+     * Uses a nesting-aware parser instead of a non-greedy regex so that each
+     * opening @foreach is matched with its own @endforeach even when loops are
+     * nested inside one another.
      *
      * Inside the body:
      *   {{ $item }}       — scalar item
@@ -149,45 +153,141 @@ class TemplateEngine
      */
     private function processForeach(string $content, array $params): string
     {
-        return preg_replace_callback(
-            '/@foreach\(\s*\$(\w+)\s*\)(.*?)@endforeach/s',
-            function (array $matches) use ($params): string {
-                $varName = $matches[1];
-                $body    = $matches[2];
+        $result   = '';
+        $pos      = 0;
+        $len      = strlen($content);
+        $openTag  = '@foreach(';
+        $closeTag = '@endforeach';
 
-                if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
-                    return '';
+        while ($pos < $len) {
+            // Find the next @foreach( directive.
+            $foreachStart = strpos($content, $openTag, $pos);
+            if ($foreachStart === false) {
+                $result .= substr($content, $pos);
+                break;
+            }
+
+            // Append content that precedes this directive.
+            $result .= substr($content, $pos, $foreachStart - $pos);
+
+            // Parse the variable name from @foreach($varName).
+            $parenOpen  = $foreachStart + strlen($openTag) - 1; // position of '('
+            $parenClose = strpos($content, ')', $parenOpen + 1);
+            if ($parenClose === false) {
+                // Malformed directive — emit literally and move past.
+                $result .= $openTag;
+                $pos = $foreachStart + strlen($openTag);
+                continue;
+            }
+
+            $varExpr = trim(substr($content, $parenOpen + 1, $parenClose - $parenOpen - 1));
+            if (!preg_match('/^\$(\w+)$/', $varExpr, $varMatch)) {
+                // Unrecognised expression — emit literally and move past.
+                $result .= substr($content, $foreachStart, $parenClose - $foreachStart + 1);
+                $pos = $parenClose + 1;
+                continue;
+            }
+            $varName   = $varMatch[1];
+            $bodyStart = $parenClose + 1;
+
+            // Find the matching @endforeach by counting nesting depth.
+            $depth     = 1;
+            $searchPos = $bodyStart;
+            $bodyEnd   = -1;
+            $fullEnd   = -1;
+
+            while ($searchPos < $len) {
+                $nextOpen  = strpos($content, $openTag, $searchPos);
+                $nextClose = strpos($content, $closeTag, $searchPos);
+
+                if ($nextClose === false) {
+                    break; // No matching @endforeach — will fall through to error path.
                 }
 
-                $result = '';
-                foreach ($params[$varName] as $item) {
-                    $iterContent = $body;
-
-                    if (is_array($item)) {
-                        foreach ($item as $key => $value) {
-                            $iterContent = str_replace(
-                                '{{ $item.' . $key . ' }}',
-                                htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
-                                $iterContent
-                            );
-                        }
-                        // Remove any unresolved {{ $item.xxx }} inside this iteration.
-                        $iterContent = preg_replace('/\{\{\s*\$item\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
-                    } else {
-                        $iterContent = str_replace(
-                            '{{ $item }}',
-                            htmlspecialchars((string) $item, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
-                            $iterContent
-                        );
+                if ($nextOpen !== false && $nextOpen < $nextClose) {
+                    $depth++;
+                    $searchPos = $nextOpen + strlen($openTag);
+                } else {
+                    $depth--;
+                    if ($depth === 0) {
+                        $bodyEnd = $nextClose;
+                        $fullEnd = $nextClose + strlen($closeTag);
+                        break;
                     }
-
-                    $result .= $iterContent;
+                    $searchPos = $nextClose + strlen($closeTag);
                 }
+            }
 
-                return $result;
-            },
-            $content
-        ) ?? $content;
+            if ($bodyEnd === -1) {
+                // No matching @endforeach found — emit the opening tag literally.
+                $result .= $openTag;
+                $pos = $foreachStart + strlen($openTag);
+                continue;
+            }
+
+            $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
+
+            // Expand the foreach block and advance past the closing @endforeach.
+            $result .= $this->expandForeachBody($varName, $body, $params);
+            $pos = $fullEnd;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Expand a single @foreach body for every element in the named parameter.
+     *
+     * Nested @foreach blocks are resolved *before* the outer {{ $item }} /
+     * {{ $item.key }} placeholders are substituted so that the inner loop's
+     * own $item references are consumed first, avoiding naming conflicts.
+     */
+    private function expandForeachBody(string $varName, string $body, array $params): string
+    {
+        if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
+            return '';
+        }
+
+        $result = '';
+        foreach ($params[$varName] as $item) {
+            $iterContent = $body;
+
+            if (is_array($item)) {
+                // Resolve nested @foreach blocks first.  Item fields are merged
+                // into params so that an inner @foreach($fieldName) can iterate
+                // over a sub-array that belongs to the current outer item.
+                $iterContent = $this->processForeach($iterContent, array_merge($params, $item));
+
+                // Then substitute {{ $item.key }} placeholders for this iteration.
+                foreach ($item as $key => $value) {
+                    if (!is_scalar($value) && $value !== null) {
+                        continue; // Arrays/objects cannot be inlined; null is allowed (renders as '').
+                    }
+                    $iterContent = str_replace(
+                        '{{ $item.' . $key . ' }}',
+                        htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                        $iterContent
+                    );
+                }
+                // Remove any unresolved {{ $item.xxx }} placeholders.
+                $iterContent = preg_replace('/\{\{\s*\$item\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
+            } else {
+                // Resolve nested @foreach blocks first so that inner {{ $item }}
+                // placeholders are consumed before the outer replacement runs.
+                $iterContent = $this->processForeach($iterContent, $params);
+
+                // Then substitute the outer {{ $item }} placeholder.
+                $iterContent = str_replace(
+                    '{{ $item }}',
+                    htmlspecialchars((string) $item, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                    $iterContent
+                );
+            }
+
+            $result .= $iterContent;
+        }
+
+        return $result;
     }
 
     /**

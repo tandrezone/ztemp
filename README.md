@@ -150,6 +150,46 @@ $engine->render('users.html', [
 
 If the referenced variable does not exist or is not an array the block is removed from the output.
 
+#### Nested foreach
+
+`@foreach` blocks can be nested to any depth.
+
+```html
+<!-- templates/catalog.html -->
+@foreach($categories)
+<h2>{{ $item.name }}</h2>
+<ul>
+@foreach($tags)
+  <li>{{ $item }}</li>
+@endforeach
+</ul>
+@endforeach
+```
+
+When the outer item is an associative array, its fields are also available to the
+inner `@foreach` by their key name, so an inner loop can iterate over a sub-array
+field of the current outer element:
+
+```html
+@foreach($users)
+<p>{{ $item.name }}</p>
+<ul>
+@foreach($skills)
+  <li>{{ $item }}</li>
+@endforeach
+</ul>
+@endforeach
+```
+
+```php
+$engine->render('users.html', [
+    'users' => [
+        ['name' => 'Alice', 'skills' => ['PHP', 'JS']],
+        ['name' => 'Bob',   'skills' => ['Python']],
+    ],
+]);
+```
+
 ---
 
 ## API Reference
