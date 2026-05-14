@@ -371,10 +371,6 @@ class TemplateEngine
     private function resolveForeachSource(string $sourceExpr, array $params): mixed
     {
         $parts = explode('.', $sourceExpr);
-        if ($parts === []) {
-            return null;
-        }
-
         if (!array_key_exists($parts[0], $params)) {
             return null;
         }
