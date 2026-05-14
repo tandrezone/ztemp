@@ -12,11 +12,18 @@ use RuntimeException;
  * Supported directives:
  *   - {{ $variable }}          — HTML-escaped variable output
  *   - @include(path)           — includes another template (path-traversal safe)
- *   - @foreach($var) … @endforeach — iterates over an array parameter
+ *   - @foreach($var) … @endforeach            — iterates over an array parameter
+ *   - @foreach($var as $alias) … @endforeach  — iterates with a custom item alias
+ *   - @foreach($var as $k => $v) … @endforeach — iterates with key and value aliases
  *
  * Inside @foreach blocks:
- *   - {{ $item }}              — scalar item value
- *   - {{ $item.key }}          — associative-array item field
+ *   - {{ $item }}              — scalar item value (default alias)
+ *   - {{ $item.key }}          — associative-array item field (default alias)
+ *   - {{ $alias }}             — scalar item value with custom alias
+ *   - {{ $alias.key }}         — associative-array item field with custom alias
+ *   - {{ $k }}                 — array key (key => value syntax)
+ *   - {{ $v }}                 — scalar item value (key => value syntax)
+ *   - {{ $v.key }}             — associative-array item field (key => value syntax)
  */
 class TemplateEngine
 {
@@ -141,41 +148,65 @@ class TemplateEngine
     }
 
     /**
-     * Process @foreach($var) … @endforeach blocks.
+     * Process @foreach blocks in three supported forms:
+     *
+     *   @foreach($var) … @endforeach
+     *   @foreach($var as $alias) … @endforeach
+     *   @foreach($var as $key => $val) … @endforeach
      *
      * Inside the body:
-     *   {{ $item }}       — scalar item
-     *   {{ $item.key }}   — field of an associative-array item
+     *   {{ $item }}        — scalar item (default alias)
+     *   {{ $item.key }}    — associative-array field (default alias)
+     *   {{ $alias }}       — scalar item with custom alias
+     *   {{ $alias.field }} — associative-array field with custom alias
+     *   {{ $key }}         — array key (key => val syntax)
+     *   {{ $val }}         — scalar item value (key => val syntax)
+     *   {{ $val.field }}   — associative-array field (key => val syntax)
      */
     private function processForeach(string $content, array $params): string
     {
         return preg_replace_callback(
-            '/@foreach\(\s*\$(\w+)\s*\)(.*?)@endforeach/s',
+            '/@foreach\(\s*\$(\w+)(?:\s+as\s+\$(\w+)(?:\s*=>\s*\$(\w+))?)?\s*\)(.*?)@endforeach/s',
             function (array $matches) use ($params): string {
-                $varName = $matches[1];
-                $body    = $matches[2];
+                $varName  = $matches[1];
+                $aliasKey = $matches[2] !== '' ? $matches[2] : null;
+                $valName  = (isset($matches[3]) && $matches[3] !== '') ? $matches[3] : null;
+                $body     = $matches[4];
 
                 if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
                     return '';
                 }
 
+                // $isKeyVal: @foreach($var as $k => $v)
+                // $itemName: the placeholder used for the current item value
+                $isKeyVal = ($aliasKey !== null && $valName !== null);
+                $itemName = $isKeyVal ? $valName : ($aliasKey ?? 'item');
+
                 $result = '';
-                foreach ($params[$varName] as $item) {
+                foreach ($params[$varName] as $key => $item) {
                     $iterContent = $body;
 
+                    if ($isKeyVal) {
+                        $iterContent = str_replace(
+                            '{{ $' . $aliasKey . ' }}',
+                            htmlspecialchars((string) $key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                            $iterContent
+                        );
+                    }
+
                     if (is_array($item)) {
-                        foreach ($item as $key => $value) {
+                        foreach ($item as $field => $value) {
                             $iterContent = str_replace(
-                                '{{ $item.' . $key . ' }}',
+                                '{{ $' . $itemName . '.' . $field . ' }}',
                                 htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                                 $iterContent
                             );
                         }
-                        // Remove any unresolved {{ $item.xxx }} inside this iteration.
-                        $iterContent = preg_replace('/\{\{\s*\$item\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
+                        // Remove any unresolved {{ $itemName.xxx }} inside this iteration.
+                        $iterContent = preg_replace('/\{\{\s*\$' . preg_quote($itemName, '/') . '\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
                     } else {
                         $iterContent = str_replace(
-                            '{{ $item }}',
+                            '{{ $' . $itemName . ' }}',
                             htmlspecialchars((string) $item, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                             $iterContent
                         );
