@@ -203,7 +203,7 @@ class TemplateEngine
             //   $varName as $alias
             //   $varName as $firstVar => $valVar
             $varExpr = trim(substr($content, $parenOpen + 1, $parenClose - $parenOpen - 1));
-            $exprPattern = '/^\$(?P<sourceExpr>\w+(?:\.\w+)*)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
+            $exprPattern = '/^\$(?P<sourcePath>\w+(?:\.\w+)*)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
             if (!preg_match($exprPattern, $varExpr, $varMatch)) {
                 // Unrecognised expression — emit literally and move past.
                 $result .= substr($content, $foreachStart, $parenClose - $foreachStart + 1);
@@ -211,7 +211,7 @@ class TemplateEngine
                 continue;
             }
 
-            $sourceExpr = $varMatch['sourceExpr'];
+            $sourceExpr = $varMatch['sourcePath'];
             $firstVar  = !empty($varMatch['firstVar']) ? $varMatch['firstVar'] : null;
             $valVar    = !empty($varMatch['valVar'])   ? $varMatch['valVar']   : null;
             $bodyStart = $parenClose + 1;
@@ -303,6 +303,8 @@ class TemplateEngine
                 // into params so that an inner @foreach($fieldName) can iterate
                 // over a sub-array that belongs to the current outer item.
                 $iterParams = array_merge($params, $item);
+                // Preserve the loop alias itself (e.g. $user) for nested sources
+                // such as @foreach($user.skills), even if item fields overlap.
                 $iterParams[$itemName] = $item;
                 $iterContent = $this->processForeach($iterContent, $iterParams);
 
