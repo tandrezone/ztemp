@@ -148,6 +148,21 @@ class TemplateEngine
     }
 
     /**
+     * Regex pattern for @foreach blocks. Named capture groups:
+     *   var      — the array parameter name            e.g. 'items'
+     *   firstVar — first variable in the 'as' clause  e.g. alias or key name (optional)
+     *   valVar   — second variable (after '=>')        e.g. value name (optional)
+     *   body     — everything between the tags
+     *
+     * Matches all three forms:
+     *   @foreach($var)
+     *   @foreach($var as $alias)
+     *   @foreach($var as $key => $val)
+     */
+    private const FOREACH_PATTERN =
+        '/@foreach\(\s*\$(?P<var>\w+)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*\)(?P<body>.*?)@endforeach/s';
+
+    /**
      * Process @foreach blocks in three supported forms:
      *
      *   @foreach($var) … @endforeach
@@ -166,21 +181,24 @@ class TemplateEngine
     private function processForeach(string $content, array $params): string
     {
         return preg_replace_callback(
-            '/@foreach\(\s*\$(\w+)(?:\s+as\s+\$(\w+)(?:\s*=>\s*\$(\w+))?)?\s*\)(.*?)@endforeach/s',
+            self::FOREACH_PATTERN,
             function (array $matches) use ($params): string {
-                $varName  = $matches[1];
-                $aliasKey = $matches[2] !== '' ? $matches[2] : null;
-                $valName  = (isset($matches[3]) && $matches[3] !== '') ? $matches[3] : null;
-                $body     = $matches[4];
+                $varName  = $matches['var'];
+                // Unmatched optional groups are empty strings in PHP's PCRE.
+                $firstVar = !empty($matches['firstVar']) ? $matches['firstVar'] : null;
+                $valVar   = !empty($matches['valVar'])   ? $matches['valVar']   : null;
+                $body     = $matches['body'];
 
                 if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
                     return '';
                 }
 
-                // $isKeyVal: @foreach($var as $k => $v)
-                // $itemName: the placeholder used for the current item value
-                $isKeyVal = ($aliasKey !== null && $valName !== null);
-                $itemName = $isKeyVal ? $valName : ($aliasKey ?? 'item');
+                // Three-token form (@foreach($var as $k => $v)): $firstVar is the
+                // key variable and $valVar is the item/value variable.
+                // Two-token form (@foreach($var as $alias)): $firstVar is the alias.
+                // Default form (@foreach($var)): fall back to the implicit 'item' alias.
+                $isKeyVal = ($firstVar !== null && $valVar !== null);
+                $itemName = $isKeyVal ? $valVar : ($firstVar ?? 'item');
 
                 $result = '';
                 foreach ($params[$varName] as $key => $item) {
@@ -188,7 +206,7 @@ class TemplateEngine
 
                     if ($isKeyVal) {
                         $iterContent = str_replace(
-                            '{{ $' . $aliasKey . ' }}',
+                            '{{ $' . $firstVar . ' }}',
                             htmlspecialchars((string) $key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                             $iterContent
                         );
@@ -202,7 +220,8 @@ class TemplateEngine
                                 $iterContent
                             );
                         }
-                        // Remove any unresolved {{ $itemName.xxx }} inside this iteration.
+                        // Remove any unresolved {{ $itemName.field }} placeholders left
+                        // after all known fields have been substituted above.
                         $iterContent = preg_replace('/\{\{\s*\$' . preg_quote($itemName, '/') . '\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
                     } else {
                         $iterContent = str_replace(
