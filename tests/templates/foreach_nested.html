@@ -1,0 +1,10 @@
+@foreach($categories)
+<section>
+<h2>{{ $item.name }}</h2>
+<ul>
+@foreach($tags)
+<li>{{ $item }}</li>
+@endforeach
+</ul>
+</section>
+@endforeach

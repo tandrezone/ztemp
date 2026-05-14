@@ -222,6 +222,78 @@ class TemplateEngineTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // Nested @foreach
+    // -------------------------------------------------------------------------
+
+    public function testNestedForeachOuterAssocInnerScalar(): void
+    {
+        $output = $this->engine->render('foreach_nested.html', [
+            'categories' => [
+                ['name' => 'Fruits'],
+                ['name' => 'Veggies'],
+            ],
+            'tags' => ['organic', 'fresh'],
+        ]);
+        $this->assertStringContainsString('<h2>Fruits</h2>', $output);
+        $this->assertStringContainsString('<h2>Veggies</h2>', $output);
+        // Inner tags rendered for each outer category
+        $this->assertSame(2, substr_count($output, '<li>organic</li>'));
+        $this->assertSame(2, substr_count($output, '<li>fresh</li>'));
+    }
+
+    public function testNestedForeachTwoScalarLists(): void
+    {
+        $fixture = $this->templateDir . '/foreach_nested_scalar.html';
+        file_put_contents(
+            $fixture,
+            "@foreach(\$outer)\nouter={{ \$item }}\n@foreach(\$inner)\ninner={{ \$item }}\n@endforeach\n@endforeach\n"
+        );
+
+        try {
+            $output = $this->engine->render('foreach_nested_scalar.html', [
+                'outer' => ['A', 'B'],
+                'inner' => ['x', 'y'],
+            ]);
+            // Both outer items present
+            $this->assertStringContainsString('outer=A', $output);
+            $this->assertStringContainsString('outer=B', $output);
+            // Inner items appear once per outer iteration
+            $this->assertSame(2, substr_count($output, 'inner=x'));
+            $this->assertSame(2, substr_count($output, 'inner=y'));
+        } finally {
+            @unlink($fixture);
+        }
+    }
+
+    public function testNestedForeachWithSubArrayField(): void
+    {
+        // The inner @foreach iterates over a field of each outer assoc item.
+        // Because the outer item's fields are merged into params before the
+        // inner loop runs, @foreach($skills) resolves correctly.
+        $fixture = $this->templateDir . '/foreach_nested_subfield.html';
+        file_put_contents(
+            $fixture,
+            "@foreach(\$users)\n{{ \$item.name }}:\n@foreach(\$skills)\n- {{ \$item }}\n@endforeach\n@endforeach\n"
+        );
+
+        try {
+            $output = $this->engine->render('foreach_nested_subfield.html', [
+                'users' => [
+                    ['name' => 'Alice', 'skills' => ['PHP', 'JS']],
+                    ['name' => 'Bob',   'skills' => ['Python']],
+                ],
+            ]);
+            $this->assertStringContainsString('Alice:', $output);
+            $this->assertStringContainsString('Bob:', $output);
+            $this->assertStringContainsString('- PHP', $output);
+            $this->assertStringContainsString('- JS', $output);
+            $this->assertStringContainsString('- Python', $output);
+        } finally {
+            @unlink($fixture);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Security: path traversal
     // -------------------------------------------------------------------------
 
