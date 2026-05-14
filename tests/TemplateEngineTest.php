@@ -161,6 +161,53 @@ class TemplateEngineTest extends TestCase
         $this->assertStringNotContainsString('<li>', $output);
     }
 
+    public function testForeachWithCustomItemAlias(): void
+    {
+        $output = $this->engine->render('foreach_as_alias.html', [
+            'items' => ['apple', 'banana', 'cherry'],
+        ]);
+        $this->assertStringContainsString('<li>apple</li>', $output);
+        $this->assertStringContainsString('<li>banana</li>', $output);
+        $this->assertStringContainsString('<li>cherry</li>', $output);
+    }
+
+    public function testForeachAliasEscapesValues(): void
+    {
+        $output = $this->engine->render('foreach_as_alias.html', [
+            'items' => ['<script>alert(1)</script>'],
+        ]);
+        $this->assertStringNotContainsString('<script>', $output);
+        $this->assertStringContainsString('&lt;script&gt;', $output);
+    }
+
+    public function testForeachWithKeyValueScalar(): void
+    {
+        $output = $this->engine->render('foreach_as_key_value.html', [
+            'data' => ['color' => 'red', 'size' => 'large'],
+        ]);
+        $this->assertStringContainsString('<dt>color</dt><dd>red</dd>', $output);
+        $this->assertStringContainsString('<dt>size</dt><dd>large</dd>', $output);
+    }
+
+    public function testForeachWithKeyValueAssoc(): void
+    {
+        $output = $this->engine->render('foreach_as_key_value_assoc.html', [
+            'users' => [
+                ['name' => 'Alice', 'age' => 30],
+                ['name' => 'Bob',   'age' => 25],
+            ],
+        ]);
+        $this->assertStringContainsString('<li>0: Alice (30)</li>', $output);
+        $this->assertStringContainsString('<li>1: Bob (25)</li>', $output);
+    }
+
+    public function testForeachWithKeyValueMissingVariableProducesEmptyOutput(): void
+    {
+        $output = $this->engine->render('foreach_as_key_value.html', []);
+        $this->assertStringNotContainsString('@foreach', $output);
+        $this->assertStringNotContainsString('{{ $', $output);
+    }
+
     public function testForeachAndVariablesTogether(): void
     {
         $output = $this->engine->render('combined.html', [

@@ -12,11 +12,18 @@ use RuntimeException;
  * Supported directives:
  *   - {{ $variable }}          — HTML-escaped variable output
  *   - @include(path)           — includes another template (path-traversal safe)
- *   - @foreach($var) … @endforeach — iterates over an array parameter
+ *   - @foreach($var) … @endforeach            — iterates over an array parameter
+ *   - @foreach($var as $alias) … @endforeach  — iterates with a custom item alias
+ *   - @foreach($var as $k => $v) … @endforeach — iterates with key and value aliases
  *
  * Inside @foreach blocks:
- *   - {{ $item }}              — scalar item value
- *   - {{ $item.key }}          — associative-array item field
+ *   - {{ $item }}              — scalar item value (default alias)
+ *   - {{ $item.key }}          — associative-array item field (default alias)
+ *   - {{ $alias }}             — scalar item value with custom alias
+ *   - {{ $alias.key }}         — associative-array item field with custom alias
+ *   - {{ $k }}                 — array key (key => value syntax)
+ *   - {{ $v }}                 — scalar item value (key => value syntax)
+ *   - {{ $v.key }}             — associative-array item field (key => value syntax)
  */
 class TemplateEngine
 {
@@ -141,15 +148,25 @@ class TemplateEngine
     }
 
     /**
-     * Process @foreach($var) … @endforeach blocks, including nested ones.
+     * Process @foreach blocks in three supported forms, including nested ones.
      *
      * Uses a nesting-aware parser instead of a non-greedy regex so that each
      * opening @foreach is matched with its own @endforeach even when loops are
      * nested inside one another.
      *
+     * Supported forms:
+     *   @foreach($var) … @endforeach
+     *   @foreach($var as $alias) … @endforeach
+     *   @foreach($var as $key => $val) … @endforeach
+     *
      * Inside the body:
-     *   {{ $item }}       — scalar item
-     *   {{ $item.key }}   — field of an associative-array item
+     *   {{ $item }}        — scalar item (default alias)
+     *   {{ $item.key }}    — associative-array field (default alias)
+     *   {{ $alias }}       — scalar item with custom alias
+     *   {{ $alias.field }} — associative-array field with custom alias
+     *   {{ $key }}         — array key (key => val syntax)
+     *   {{ $val }}         — scalar item value (key => val syntax)
+     *   {{ $val.field }}   — associative-array field (key => val syntax)
      */
     private function processForeach(string $content, array $params): string
     {
@@ -170,7 +187,7 @@ class TemplateEngine
             // Append content that precedes this directive.
             $result .= substr($content, $pos, $foreachStart - $pos);
 
-            // Parse the variable name from @foreach($varName).
+            // Find the closing ')' of the @foreach(...) expression.
             $parenOpen  = $foreachStart + strlen($openTag) - 1; // position of '('
             $parenClose = strpos($content, ')', $parenOpen + 1);
             if ($parenClose === false) {
@@ -180,14 +197,23 @@ class TemplateEngine
                 continue;
             }
 
+            // Parse the expression inside the parentheses.
+            // Accepted forms:
+            //   $varName
+            //   $varName as $alias
+            //   $varName as $firstVar => $valVar
             $varExpr = trim(substr($content, $parenOpen + 1, $parenClose - $parenOpen - 1));
-            if (!preg_match('/^\$(\w+)$/', $varExpr, $varMatch)) {
+            $exprPattern = '/^\$(?P<var>\w+)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
+            if (!preg_match($exprPattern, $varExpr, $varMatch)) {
                 // Unrecognised expression — emit literally and move past.
                 $result .= substr($content, $foreachStart, $parenClose - $foreachStart + 1);
                 $pos = $parenClose + 1;
                 continue;
             }
-            $varName   = $varMatch[1];
+
+            $varName   = $varMatch['var'];
+            $firstVar  = !empty($varMatch['firstVar']) ? $varMatch['firstVar'] : null;
+            $valVar    = !empty($varMatch['valVar'])   ? $varMatch['valVar']   : null;
             $bodyStart = $parenClose + 1;
 
             // Find the matching @endforeach by counting nesting depth.
@@ -228,7 +254,7 @@ class TemplateEngine
             $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
 
             // Expand the foreach block and advance past the closing @endforeach.
-            $result .= $this->expandForeachBody($varName, $body, $params);
+            $result .= $this->expandForeachBody($varName, $firstVar, $valVar, $body, $params);
             $pos = $fullEnd;
         }
 
@@ -238,18 +264,37 @@ class TemplateEngine
     /**
      * Expand a single @foreach body for every element in the named parameter.
      *
-     * Nested @foreach blocks are resolved *before* the outer {{ $item }} /
-     * {{ $item.key }} placeholders are substituted so that the inner loop's
-     * own $item references are consumed first, avoiding naming conflicts.
+     * Nested @foreach blocks are resolved *before* the outer item placeholders
+     * are substituted so that inner loop variables are consumed first, avoiding
+     * naming conflicts.
+     *
+     * @param string      $varName  The array parameter name.
+     * @param string|null $firstVar First 'as' variable: the alias (two-token form)
+     *                              or the key variable (three-token form).
+     * @param string|null $valVar   Second 'as' variable: the value alias (three-token form only).
+     * @param string      $body     The raw template body between the tags.
+     * @param array<string, mixed> $params  Current template parameters.
      */
-    private function expandForeachBody(string $varName, string $body, array $params): string
-    {
+    private function expandForeachBody(
+        string  $varName,
+        ?string $firstVar,
+        ?string $valVar,
+        string  $body,
+        array   $params
+    ): string {
         if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
             return '';
         }
 
+        // Three-token form (@foreach($var as $k => $v)): $firstVar is the
+        // key variable and $valVar is the item/value variable.
+        // Two-token form (@foreach($var as $alias)): $firstVar is the alias.
+        // Default form (@foreach($var)): fall back to the implicit 'item' alias.
+        $isKeyVal = ($firstVar !== null && $valVar !== null);
+        $itemName = $isKeyVal ? $valVar : ($firstVar ?? 'item');
+
         $result = '';
-        foreach ($params[$varName] as $item) {
+        foreach ($params[$varName] as $key => $item) {
             $iterContent = $body;
 
             if (is_array($item)) {
@@ -258,27 +303,45 @@ class TemplateEngine
                 // over a sub-array that belongs to the current outer item.
                 $iterContent = $this->processForeach($iterContent, array_merge($params, $item));
 
-                // Then substitute {{ $item.key }} placeholders for this iteration.
-                foreach ($item as $key => $value) {
+                // Substitute {{ $key }} if using the key => val syntax.
+                if ($isKeyVal) {
+                    $iterContent = str_replace(
+                        '{{ $' . $firstVar . ' }}',
+                        htmlspecialchars((string) $key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                        $iterContent
+                    );
+                }
+
+                // Substitute {{ $itemName.field }} placeholders for this iteration.
+                foreach ($item as $field => $value) {
                     if (!is_scalar($value) && $value !== null) {
                         continue; // Arrays/objects cannot be inlined; null is allowed (renders as '').
                     }
                     $iterContent = str_replace(
-                        '{{ $item.' . $key . ' }}',
+                        '{{ $' . $itemName . '.' . $field . ' }}',
                         htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                         $iterContent
                     );
                 }
-                // Remove any unresolved {{ $item.xxx }} placeholders.
-                $iterContent = preg_replace('/\{\{\s*\$item\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
+                // Remove any unresolved {{ $itemName.field }} placeholders.
+                $iterContent = preg_replace('/\{\{\s*\$' . preg_quote($itemName, '/') . '\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
             } else {
                 // Resolve nested @foreach blocks first so that inner {{ $item }}
                 // placeholders are consumed before the outer replacement runs.
                 $iterContent = $this->processForeach($iterContent, $params);
 
-                // Then substitute the outer {{ $item }} placeholder.
+                // Substitute {{ $key }} if using the key => val syntax.
+                if ($isKeyVal) {
+                    $iterContent = str_replace(
+                        '{{ $' . $firstVar . ' }}',
+                        htmlspecialchars((string) $key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                        $iterContent
+                    );
+                }
+
+                // Substitute the item placeholder.
                 $iterContent = str_replace(
-                    '{{ $item }}',
+                    '{{ $' . $itemName . ' }}',
                     htmlspecialchars((string) $item, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                     $iterContent
                 );

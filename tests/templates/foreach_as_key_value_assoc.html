@@ -1,0 +1,5 @@
+<ul>
+@foreach($users as $idx => $user)
+<li>{{ $idx }}: {{ $user.name }} ({{ $user.age }})</li>
+@endforeach
+</ul>
