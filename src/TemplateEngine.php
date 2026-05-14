@@ -369,7 +369,7 @@ class TemplateEngine
      * @param string $sourcePath The source path to resolve (supports dot notation).
      * @param array<string, mixed> $params
      *
-     * @return array<mixed>|null
+     * @return mixed
      */
     private function resolveForeachSource(string $sourcePath, array $params): mixed
     {
