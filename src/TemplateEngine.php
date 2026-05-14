@@ -203,7 +203,7 @@ class TemplateEngine
             //   $varName as $alias
             //   $varName as $firstVar => $valVar
             $varExpr = trim(substr($content, $parenOpen + 1, $parenClose - $parenOpen - 1));
-            $exprPattern = '/^\$(?P<var>\w+)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
+            $exprPattern = '/^\$(?P<var>\w+(?:\.\w+)*)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
             if (!preg_match($exprPattern, $varExpr, $varMatch)) {
                 // Unrecognised expression — emit literally and move past.
                 $result .= substr($content, $foreachStart, $parenClose - $foreachStart + 1);
@@ -211,7 +211,7 @@ class TemplateEngine
                 continue;
             }
 
-            $varName   = $varMatch['var'];
+            $sourceExpr = $varMatch['var'];
             $firstVar  = !empty($varMatch['firstVar']) ? $varMatch['firstVar'] : null;
             $valVar    = !empty($varMatch['valVar'])   ? $varMatch['valVar']   : null;
             $bodyStart = $parenClose + 1;
@@ -254,7 +254,7 @@ class TemplateEngine
             $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
 
             // Expand the foreach block and advance past the closing @endforeach.
-            $result .= $this->expandForeachBody($varName, $firstVar, $valVar, $body, $params);
+            $result .= $this->expandForeachBody($sourceExpr, $firstVar, $valVar, $body, $params);
             $pos = $fullEnd;
         }
 
@@ -268,7 +268,7 @@ class TemplateEngine
      * are substituted so that inner loop variables are consumed first, avoiding
      * naming conflicts.
      *
-     * @param string      $varName  The array parameter name.
+     * @param string      $sourceExpr  The array source expression (supports dot notation).
      * @param string|null $firstVar First 'as' variable: the alias (two-token form)
      *                              or the key variable (three-token form).
      * @param string|null $valVar   Second 'as' variable: the value alias (three-token form only).
@@ -276,13 +276,14 @@ class TemplateEngine
      * @param array<string, mixed> $params  Current template parameters.
      */
     private function expandForeachBody(
-        string  $varName,
+        string  $sourceExpr,
         ?string $firstVar,
         ?string $valVar,
         string  $body,
         array   $params
     ): string {
-        if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
+        $iterable = $this->resolveForeachSource($sourceExpr, $params);
+        if (!is_array($iterable)) {
             return '';
         }
 
@@ -294,14 +295,16 @@ class TemplateEngine
         $itemName = $isKeyVal ? $valVar : ($firstVar ?? 'item');
 
         $result = '';
-        foreach ($params[$varName] as $key => $item) {
+        foreach ($iterable as $key => $item) {
             $iterContent = $body;
 
             if (is_array($item)) {
                 // Resolve nested @foreach blocks first.  Item fields are merged
                 // into params so that an inner @foreach($fieldName) can iterate
                 // over a sub-array that belongs to the current outer item.
-                $iterContent = $this->processForeach($iterContent, array_merge($params, $item));
+                $iterParams = array_merge($params, $item);
+                $iterParams[$itemName] = $item;
+                $iterContent = $this->processForeach($iterContent, $iterParams);
 
                 // Substitute {{ $key }} if using the key => val syntax.
                 if ($isKeyVal) {
@@ -351,6 +354,40 @@ class TemplateEngine
         }
 
         return $result;
+    }
+
+    /**
+     * Resolve a @foreach source expression from params.
+     *
+     * Supports:
+     *   $var
+     *   $var.subField
+     *   $var.subField.deepField
+     *
+     * @param array<string, mixed> $params
+     *
+     * @return mixed
+     */
+    private function resolveForeachSource(string $sourceExpr, array $params): mixed
+    {
+        $parts = explode('.', $sourceExpr);
+        if ($parts === []) {
+            return null;
+        }
+
+        if (!array_key_exists($parts[0], $params)) {
+            return null;
+        }
+
+        $current = $params[$parts[0]];
+        foreach (array_slice($parts, 1) as $part) {
+            if (!is_array($current) || !array_key_exists($part, $current)) {
+                return null;
+            }
+            $current = $current[$part];
+        }
+
+        return $current;
     }
 
     /**

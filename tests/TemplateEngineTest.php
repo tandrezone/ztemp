@@ -293,6 +293,31 @@ class TemplateEngineTest extends TestCase
         }
     }
 
+    public function testNestedForeachWithAliasDotNotationSource(): void
+    {
+        $fixture = $this->templateDir . '/foreach_nested_alias_dot_source.html';
+        file_put_contents(
+            $fixture,
+            "@foreach(\$users as \$user)\n{{ \$user.name }}:\n@foreach(\$user.skills)\n- {{ \$item }}\n@endforeach\n@endforeach\n"
+        );
+
+        try {
+            $output = $this->engine->render('foreach_nested_alias_dot_source.html', [
+                'users' => [
+                    ['name' => 'Alice', 'skills' => ['PHP', 'JS']],
+                    ['name' => 'Bob',   'skills' => ['Python']],
+                ],
+            ]);
+            $this->assertStringContainsString('Alice:', $output);
+            $this->assertStringContainsString('Bob:', $output);
+            $this->assertStringContainsString('- PHP', $output);
+            $this->assertStringContainsString('- JS', $output);
+            $this->assertStringContainsString('- Python', $output);
+        } finally {
+            @unlink($fixture);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Security: path traversal
     // -------------------------------------------------------------------------
