@@ -12,11 +12,18 @@ use RuntimeException;
  * Supported directives:
  *   - {{ $variable }}          — HTML-escaped variable output
  *   - @include(path)           — includes another template (path-traversal safe)
- *   - @foreach($var) … @endforeach — iterates over an array parameter
+ *   - @foreach($var) … @endforeach            — iterates over an array parameter
+ *   - @foreach($var as $alias) … @endforeach  — iterates with a custom item alias
+ *   - @foreach($var as $k => $v) … @endforeach — iterates with key and value aliases
  *
  * Inside @foreach blocks:
- *   - {{ $item }}              — scalar item value
- *   - {{ $item.key }}          — associative-array item field
+ *   - {{ $item }}              — scalar item value (default alias)
+ *   - {{ $item.key }}          — associative-array item field (default alias)
+ *   - {{ $alias }}             — scalar item value with custom alias
+ *   - {{ $alias.key }}         — associative-array item field with custom alias
+ *   - {{ $k }}                 — array key (key => value syntax)
+ *   - {{ $v }}                 — scalar item value (key => value syntax)
+ *   - {{ $v.key }}             — associative-array item field (key => value syntax)
  */
 class TemplateEngine
 {
@@ -141,41 +148,84 @@ class TemplateEngine
     }
 
     /**
-     * Process @foreach($var) … @endforeach blocks.
+     * Regex pattern for @foreach blocks. Named capture groups:
+     *   var      — the array parameter name            e.g. 'items'
+     *   firstVar — first variable in the 'as' clause  e.g. alias or key name (optional)
+     *   valVar   — second variable (after '=>')        e.g. value name (optional)
+     *   body     — everything between the tags
+     *
+     * Matches all three forms:
+     *   @foreach($var)
+     *   @foreach($var as $alias)
+     *   @foreach($var as $key => $val)
+     */
+    private const FOREACH_PATTERN =
+        '/@foreach\(\s*\$(?P<var>\w+)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*\)(?P<body>.*?)@endforeach/s';
+
+    /**
+     * Process @foreach blocks in three supported forms:
+     *
+     *   @foreach($var) … @endforeach
+     *   @foreach($var as $alias) … @endforeach
+     *   @foreach($var as $key => $val) … @endforeach
      *
      * Inside the body:
-     *   {{ $item }}       — scalar item
-     *   {{ $item.key }}   — field of an associative-array item
+     *   {{ $item }}        — scalar item (default alias)
+     *   {{ $item.key }}    — associative-array field (default alias)
+     *   {{ $alias }}       — scalar item with custom alias
+     *   {{ $alias.field }} — associative-array field with custom alias
+     *   {{ $key }}         — array key (key => val syntax)
+     *   {{ $val }}         — scalar item value (key => val syntax)
+     *   {{ $val.field }}   — associative-array field (key => val syntax)
      */
     private function processForeach(string $content, array $params): string
     {
         return preg_replace_callback(
-            '/@foreach\(\s*\$(\w+)\s*\)(.*?)@endforeach/s',
+            self::FOREACH_PATTERN,
             function (array $matches) use ($params): string {
-                $varName = $matches[1];
-                $body    = $matches[2];
+                $varName  = $matches['var'];
+                // Unmatched optional groups are empty strings in PHP's PCRE.
+                $firstVar = !empty($matches['firstVar']) ? $matches['firstVar'] : null;
+                $valVar   = !empty($matches['valVar'])   ? $matches['valVar']   : null;
+                $body     = $matches['body'];
 
                 if (!array_key_exists($varName, $params) || !is_array($params[$varName])) {
                     return '';
                 }
 
+                // Three-token form (@foreach($var as $k => $v)): $firstVar is the
+                // key variable and $valVar is the item/value variable.
+                // Two-token form (@foreach($var as $alias)): $firstVar is the alias.
+                // Default form (@foreach($var)): fall back to the implicit 'item' alias.
+                $isKeyVal = ($firstVar !== null && $valVar !== null);
+                $itemName = $isKeyVal ? $valVar : ($firstVar ?? 'item');
+
                 $result = '';
-                foreach ($params[$varName] as $item) {
+                foreach ($params[$varName] as $key => $item) {
                     $iterContent = $body;
 
+                    if ($isKeyVal) {
+                        $iterContent = str_replace(
+                            '{{ $' . $firstVar . ' }}',
+                            htmlspecialchars((string) $key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                            $iterContent
+                        );
+                    }
+
                     if (is_array($item)) {
-                        foreach ($item as $key => $value) {
+                        foreach ($item as $field => $value) {
                             $iterContent = str_replace(
-                                '{{ $item.' . $key . ' }}',
+                                '{{ $' . $itemName . '.' . $field . ' }}',
                                 htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                                 $iterContent
                             );
                         }
-                        // Remove any unresolved {{ $item.xxx }} inside this iteration.
-                        $iterContent = preg_replace('/\{\{\s*\$item\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
+                        // Remove any unresolved {{ $itemName.field }} placeholders left
+                        // after all known fields have been substituted above.
+                        $iterContent = preg_replace('/\{\{\s*\$' . preg_quote($itemName, '/') . '\.\w+\s*\}\}/', '', $iterContent) ?? $iterContent;
                     } else {
                         $iterContent = str_replace(
-                            '{{ $item }}',
+                            '{{ $' . $itemName . ' }}',
                             htmlspecialchars((string) $item, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
                             $iterContent
                         );

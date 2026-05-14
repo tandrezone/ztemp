@@ -9,6 +9,8 @@ A lightweight, **secure** PHP template engine for processing plain HTML files.
 | Variable output | `{{ $name }}` | Inserts a parameter value (HTML-escaped) |
 | Include | `@include(path/to/partial.html)` | Embeds another template |
 | Loop | `@foreach($items) … @endforeach` | Iterates over an array parameter |
+| Loop (alias) | `@foreach($items as $item) … @endforeach` | Iterates with a custom item alias |
+| Loop (key => value) | `@foreach($items as $k => $v) … @endforeach` | Iterates with key and value aliases |
 
 ### Security built-in
 
@@ -106,9 +108,9 @@ All parameters are automatically forwarded to included templates.
 
 ### Foreach — `@foreach($param) … @endforeach`
 
-Iterate over an array parameter. Two styles are supported.
+Iterate over an array parameter. Three styles are supported.
 
-#### Scalar array
+#### Default style (implicit `$item` alias)
 
 ```html
 <!-- templates/list.html -->
@@ -125,7 +127,39 @@ $engine->render('list.html', [
 ]);
 ```
 
-#### Associative / object array
+#### Custom item alias — `@foreach($items as $alias)`
+
+```html
+<!-- templates/list.html -->
+<ul>
+@foreach($items as $fruit)
+  <li>{{ $fruit }}</li>
+@endforeach
+</ul>
+```
+
+#### Key => value aliases — `@foreach($items as $key => $val)`
+
+Use this form to access the array key alongside the value, or to iterate
+over associative arrays with named fields.
+
+```html
+<!-- templates/attributes.html -->
+<dl>
+@foreach($attributes as $k => $v)
+  <dt>{{ $k }}</dt>
+  <dd>{{ $v }}</dd>
+@endforeach
+</dl>
+```
+
+```php
+$engine->render('attributes.html', [
+    'attributes' => ['color' => 'red', 'size' => 'large'],
+]);
+```
+
+#### Associative / object array (default alias)
 
 ```html
 <!-- templates/users.html -->
@@ -137,6 +171,18 @@ $engine->render('list.html', [
   </tr>
 @endforeach
 </table>
+```
+
+The same works with a custom alias or key=>value syntax:
+
+```html
+@foreach($users as $user)
+  <p>{{ $user.name }}</p>
+@endforeach
+
+@foreach($users as $idx => $user)
+  <p>{{ $idx }}: {{ $user.name }}</p>
+@endforeach
 ```
 
 ```php
