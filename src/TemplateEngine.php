@@ -211,7 +211,7 @@ class TemplateEngine
                 continue;
             }
 
-            $sourceExpr = $varMatch['sourcePath'];
+            $sourcePath = $varMatch['sourcePath'];
             $firstVar  = !empty($varMatch['firstVar']) ? $varMatch['firstVar'] : null;
             $valVar    = !empty($varMatch['valVar'])   ? $varMatch['valVar']   : null;
             $bodyStart = $parenClose + 1;
@@ -254,7 +254,7 @@ class TemplateEngine
             $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
 
             // Expand the foreach block and advance past the closing @endforeach.
-            $result .= $this->expandForeachBody($sourceExpr, $firstVar, $valVar, $body, $params);
+            $result .= $this->expandForeachBody($sourcePath, $firstVar, $valVar, $body, $params);
             $pos = $fullEnd;
         }
 
@@ -268,7 +268,7 @@ class TemplateEngine
      * are substituted so that inner loop variables are consumed first, avoiding
      * naming conflicts.
      *
-     * @param string      $sourceExpr  The array source expression (supports dot notation).
+     * @param string      $sourcePath  The array source path (supports dot notation).
      * @param string|null $firstVar First 'as' variable: the alias (two-token form)
      *                              or the key variable (three-token form).
      * @param string|null $valVar   Second 'as' variable: the value alias (three-token form only).
@@ -276,13 +276,13 @@ class TemplateEngine
      * @param array<string, mixed> $params  Current template parameters.
      */
     private function expandForeachBody(
-        string  $sourceExpr,
+        string  $sourcePath,
         ?string $firstVar,
         ?string $valVar,
         string  $body,
         array   $params
     ): string {
-        $iterable = $this->resolveForeachSource($sourceExpr, $params);
+        $iterable = $this->resolveForeachSource($sourcePath, $params);
         if (!is_array($iterable)) {
             return '';
         }
@@ -366,14 +366,14 @@ class TemplateEngine
      *   $var.subField
      *   $var.subField.deepField
      *
-     * @param string $sourceExpr The source expression to resolve (supports dot notation).
+     * @param string $sourcePath The source path to resolve (supports dot notation).
      * @param array<string, mixed> $params
      *
-     * @return mixed
+     * @return array<mixed>|null
      */
-    private function resolveForeachSource(string $sourceExpr, array $params): mixed
+    private function resolveForeachSource(string $sourcePath, array $params): mixed
     {
-        $parts = explode('.', $sourceExpr);
+        $parts = explode('.', $sourcePath);
         if (!array_key_exists($parts[0], $params)) {
             return null;
         }
