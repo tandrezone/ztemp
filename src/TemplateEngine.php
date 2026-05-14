@@ -203,7 +203,7 @@ class TemplateEngine
             //   $varName as $alias
             //   $varName as $firstVar => $valVar
             $varExpr = trim(substr($content, $parenOpen + 1, $parenClose - $parenOpen - 1));
-            $exprPattern = '/^\$(?P<var>\w+(?:\.\w+)*)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
+            $exprPattern = '/^\$(?P<sourceExpr>\w+(?:\.\w+)*)(?:\s+as\s+\$(?P<firstVar>\w+)(?:\s*=>\s*\$(?P<valVar>\w+))?)?\s*$/';
             if (!preg_match($exprPattern, $varExpr, $varMatch)) {
                 // Unrecognised expression — emit literally and move past.
                 $result .= substr($content, $foreachStart, $parenClose - $foreachStart + 1);
@@ -211,7 +211,7 @@ class TemplateEngine
                 continue;
             }
 
-            $sourceExpr = $varMatch['var'];
+            $sourceExpr = $varMatch['sourceExpr'];
             $firstVar  = !empty($varMatch['firstVar']) ? $varMatch['firstVar'] : null;
             $valVar    = !empty($varMatch['valVar'])   ? $varMatch['valVar']   : null;
             $bodyStart = $parenClose + 1;
@@ -364,6 +364,7 @@ class TemplateEngine
      *   $var.subField
      *   $var.subField.deepField
      *
+     * @param string $sourceExpr The source expression to resolve (supports dot notation).
      * @param array<string, mixed> $params
      *
      * @return mixed
